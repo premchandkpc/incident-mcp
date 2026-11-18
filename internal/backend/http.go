@@ -54,15 +54,15 @@ const maxSuccessBodyBytes = 8 << 20
 // decodeBoundedJSON rejects oversized JSON bodies before decoding. Read at most
 // limit+1 bytes so even a malicious streaming response has bounded memory use.
 func decodeBoundedJSON(r io.Reader, dst any) error {
-    data, err := io.ReadAll(io.LimitReader(r, maxSuccessBodyBytes+1))
-    if err != nil {
-        return fmt.Errorf("read upstream JSON: %w", err)
-    }
-    if len(data) > maxSuccessBodyBytes {
-        return fmt.Errorf("upstream JSON response exceeds %d bytes", maxSuccessBodyBytes)
-    }
-    if err := json.Unmarshal(data, dst); err != nil {
-        return fmt.Errorf("decode upstream JSON: %w", err)
-    }
-    return nil
+	data, err := io.ReadAll(io.LimitReader(r, maxSuccessBodyBytes+1))
+	if err != nil {
+	    return fmt.Errorf("read upstream JSON: %w", err)
+	}
+	if len(data) > maxSuccessBodyBytes {
+	    return fmt.Errorf("upstream JSON response exceeds %d bytes", maxSuccessBodyBytes)
+	}
+	if err := json.Unmarshal(data, dst); err != nil {
+	    return fmt.Errorf("decode upstream JSON: %w", err)
+	}
+	return nil
 }
