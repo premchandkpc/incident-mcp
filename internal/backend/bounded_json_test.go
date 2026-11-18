@@ -34,7 +34,7 @@ func TestDecodeBoundedJSON(t *testing.T) {
 	t.Run("invalid", func(t *testing.T) {
 		var got json.RawMessage
 		if err := decodeBoundedJSON(strings.NewReader("{"), &got); err == nil {
-		    t.Fatal("expected JSON error")
+			t.Fatal("expected JSON error")
 		}
 	})
 }
