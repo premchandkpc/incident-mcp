@@ -3,6 +3,7 @@ package tools
 import (
 	"fmt"
 
+	"incident-mcp/internal/backend"
 	"incident-mcp/internal/config"
 )
 
@@ -46,9 +47,32 @@ func windowProperties(cfg config.Config) map[string]any {
 	}
 }
 
+// pageProperties adds the bounded-pagination arguments shared by every tool
+// that lists Kubernetes objects. The limit is always applied upstream so a
+// single response can never grow without bound.
+func pageProperties() map[string]any {
+	return map[string]any{
+		"limit": map[string]any{
+			"type":        "integer",
+			"minimum":     1,
+			"maximum":     backend.MaxListLimit,
+			"description": fmt.Sprintf("Maximum items to return per page. Defaults to %d and is capped at %d.", backend.DefaultListLimit, backend.MaxListLimit),
+		},
+		"continue": map[string]any{
+			"type":        "string",
+			"description": "Opaque continuation token from a previous call's page.next_continue. Omit it to start from the first page.",
+		},
+	}
+}
+
+// incidentSchema exposes window arguments plus pagination for the composite
+// tool, whose pod and deployment sections both list objects.
 func incidentSchema(cfg config.Config) map[string]any {
 	props := map[string]any{"service": serviceProperty(cfg)}
 	for k, v := range windowProperties(cfg) {
+		props[k] = v
+	}
+	for k, v := range pageProperties() {
 		props[k] = v
 	}
 	return objSchema(props, []string{"service"})
@@ -63,9 +87,43 @@ func errorSpikesSchema(cfg config.Config) map[string]any {
 }
 
 func podFailuresSchema(cfg config.Config) map[string]any {
-	return objSchema(map[string]any{"service": serviceProperty(cfg)}, []string{"service"})
+	props := map[string]any{"service": serviceProperty(cfg)}
+	for k, v := range pageProperties() {
+		props[k] = v
+	}
+	return objSchema(props, []string{"service"})
 }
 
 func deploymentsSchema(cfg config.Config) map[string]any {
-	return objSchema(map[string]any{"service": serviceProperty(cfg)}, []string{"service"})
+	props := map[string]any{"service": serviceProperty(cfg)}
+	for k, v := range pageProperties() {
+		props[k] = v
+	}
+	return objSchema(props, []string{"service"})
+}
+
+// historySchema takes the window (events are filtered to it) plus pagination.
+func historySchema(cfg config.Config) map[string]any {
+	props := map[string]any{"service": serviceProperty(cfg)}
+	for k, v := range windowProperties(cfg) {
+		props[k] = v
+	}
+	for k, v := range pageProperties() {
+		props[k] = v
+	}
+	return objSchema(props, []string{"service"})
+}
+
+// alertsSchema takes an optional state filter. The window is accepted for
+// consistency with the other tools but does not filter active alerts.
+func alertsSchema(cfg config.Config) map[string]any {
+	props := map[string]any{
+		"service": serviceProperty(cfg),
+		"state": map[string]any{
+			"type":        "string",
+			"enum":        []string{"firing", "pending"},
+			"description": "Only return alerts in this state. Omit to return both.",
+		},
+	}
+	return objSchema(props, []string{"service"})
 }

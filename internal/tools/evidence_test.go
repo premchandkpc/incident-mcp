@@ -72,6 +72,10 @@ func newTestHarness(t *testing.T, failTotal bool, podsJSON, deploymentsJSON stri
 			_, _ = io.WriteString(w, podsJSON)
 		case strings.HasSuffix(r.URL.Path, "/deployments"):
 			_, _ = io.WriteString(w, deploymentsJSON)
+		case strings.HasSuffix(r.URL.Path, "/replicasets"):
+			_, _ = io.WriteString(w, harnessReplicaSets)
+		case strings.HasSuffix(r.URL.Path, "/events"):
+			_, _ = io.WriteString(w, harnessEvents)
 		default:
 			http.NotFound(w, r)
 		}
@@ -105,6 +109,33 @@ const harnessPods = `{"items":[
    "status":{"phase":"Running","conditions":[{"type":"Ready","status":"True"}],
      "containerStatuses":[{"name":"app","ready":true,"restartCount":0,"state":{"running":{"startedAt":"2026-11-17T08:00:05Z"}}}]}}]}`
 
+const harnessReplicaSets = `{"items":[
+  {"metadata":{"name":"alerts-api-7f7d9-x1","namespace":"production","creationTimestamp":"2026-11-17T11:30:00Z",
+     "annotations":{"deployment.kubernetes.io/revision":"15"},"labels":{"app":"alerts-api"}},
+   "spec":{"replicas":2,"template":{"spec":{"containers":[{"name":"app","image":"img:3"}]}}},
+   "status":{"replicas":2,"readyReplicas":2,"availableReplicas":2}},
+  {"metadata":{"name":"alerts-api-6f7d9-a2","namespace":"production","creationTimestamp":"2026-11-10T10:00:00Z",
+     "annotations":{"deployment.kubernetes.io/revision":"14"},"labels":{"app":"alerts-api"}},
+   "spec":{"replicas":2,"template":{"spec":{"containers":[{"name":"app","image":"img:2"}]}}},
+   "status":{"replicas":0,"readyReplicas":0,"availableReplicas":0}}]}`
+
+const harnessEvents = `{"items":[
+  {"metadata":{"name":"alerts-api-7f7d9-x1.17a1b2","namespace":"production","creationTimestamp":"2026-11-17T11:31:00Z"},
+   "type":"Normal","reason":"Scheduled","count":1,
+   "firstTimestamp":"2026-11-17T11:31:00Z","lastTimestamp":"2026-11-17T11:31:00Z",
+   "involvedObject":{"kind":"Pod","name":"alerts-api-7f7d9-x1","uid":"u1"},
+   "message":"Successfully assigned alerts-api/alerts-api-7f7d9-x1 to node-a"},
+  {"metadata":{"name":"alerts-api-7f7d9-x1.17a1b3","namespace":"production","creationTimestamp":"2026-11-17T11:32:00Z"},
+   "type":"Warning","reason":"BackOff","count":4,
+   "firstTimestamp":"2026-11-17T11:32:00Z","lastTimestamp":"2026-11-17T11:35:00Z",
+   "involvedObject":{"kind":"Pod","name":"alerts-api-7f7d9-x1","uid":"u1"},
+   "message":"Back-off 40s restarting failed container=app"},
+  {"metadata":{"name":"other-team-api-z.1","namespace":"production","creationTimestamp":"2026-11-17T11:33:00Z"},
+   "type":"Warning","reason":"BackOff","count":9,
+   "firstTimestamp":"2026-11-17T11:33:00Z","lastTimestamp":"2026-11-17T11:33:00Z",
+   "involvedObject":{"kind":"Pod","name":"other-team-api-z","uid":"u2"},
+   "message":"must not appear: another service's event"}]}`
+
 const harnessDeployments = `{"items":[
   {"metadata":{"name":"alerts-api","namespace":"production","creationTimestamp":"2026-11-10T10:00:00Z",
      "annotations":{"deployment.kubernetes.io/revision":"14"}},
@@ -130,7 +161,16 @@ func TestErrorSpikesEvidenceWithBrokenSecondaryQuery(t *testing.T) {
 		t.Fatalf("primary query succeeded, evidence must be returned: %v", err)
 	}
 	partial := ev["partial_failures"].([]string)
-	if len(partial) != 1 || !strings.Contains(partial[0], "request-rate query failed") {
+	// The secondary request-rate query must be reported. Latency queries are
+	// also secondary and fail here too; assert on presence rather than an
+	// exact count so adding a secondary query does not silently pass.
+	found := false
+	for _, p := range partial {
+		if strings.Contains(p, "request-rate query failed") {
+			found = true
+		}
+	}
+	if !found {
 		t.Fatalf("partial_failures = %v", partial)
 	}
 	if _, ok := ev["peak_error_ratio"]; ok {

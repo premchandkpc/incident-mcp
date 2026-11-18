@@ -40,6 +40,11 @@ func promHandler(t *testing.T) http.HandlerFunc {
 		if r.Method != http.MethodGet {
 			t.Errorf("prometheus method = %s, want GET", r.Method)
 		}
+		if r.URL.Path == "/api/v1/alerts" {
+			w.Header().Set("Content-Type", "application/json")
+			_, _ = io.WriteString(w, e2eAlerts)
+			return
+		}
 		if r.URL.Path != "/api/v1/query_range" {
 			t.Errorf("prometheus path = %s", r.URL.Path)
 			http.NotFound(w, r)
@@ -106,6 +111,46 @@ const e2eDeploymentList = `{"kind":"DeploymentList","items":[
    "status":{"replicas":3,"updatedReplicas":3,"readyReplicas":2,"availableReplicas":2,"observedGeneration":42,
      "conditions":[{"type":"Available","status":"False","reason":"MinimumReplicasUnavailable"}]}}]}`
 
+const e2eReplicaSetList = `{"kind":"ReplicaSetList","items":[
+  {"metadata":{"name":"alerts-api-7f7d9-x1","namespace":"production","creationTimestamp":"2026-11-17T11:30:00Z",
+     "annotations":{"deployment.kubernetes.io/revision":"15"},"labels":{"app":"alerts-api"}},
+   "spec":{"replicas":3,"template":{"spec":{"containers":[{"name":"app","image":"registry.internal/alerts-api:1.2.5"}]}}},
+   "status":{"replicas":3,"readyReplicas":3,"availableReplicas":3}},
+  {"metadata":{"name":"alerts-api-6f7d9-a2","namespace":"production","creationTimestamp":"2026-11-10T10:00:00Z",
+     "annotations":{"deployment.kubernetes.io/revision":"14"},"labels":{"app":"alerts-api"}},
+   "spec":{"replicas":0,"template":{"spec":{"containers":[{"name":"app","image":"registry.internal/alerts-api:1.2.4"}]}}},
+   "status":{"replicas":0,"readyReplicas":0,"availableReplicas":0}}]}`
+
+const e2eAlerts = `{"status":"success","data":{"alerts":[
+  {"labels":{"alertname":"HighErrorRate","service":"alerts-api","severity":"page"},
+   "annotations":{"summary":"5xx ratio above 5% for 10m"},
+   "state":"firing","activeAt":"2026-11-17T11:45:00Z","value":0.07},
+  {"labels":{"alertname":"PodCrashLooping","service":"alerts-api"},
+   "annotations":{"summary":"alerts-api pod restarting"},
+   "state":"pending","activeAt":"2026-11-17T11:50:00Z","value":3},
+  {"labels":{"alertname":"OtherTeamAlert","service":"other-team-api"},
+   "annotations":{"summary":"unrelated service"},
+   "state":"firing","activeAt":"2026-11-17T11:00:00Z","value":1}]}}`
+
+// e2eEvents returns namespace events with timestamps relative to now so the
+// window filter (last 15 minutes) admits them regardless of when the test
+// runs. Events for another service are included to prove the scoping filter.
+func e2eEvents(now time.Time) string {
+	recent := now.Add(-2 * time.Minute).UTC().Format(time.RFC3339)
+	older := now.Add(-30 * time.Minute).UTC().Format(time.RFC3339)
+	return fmt.Sprintf(`{"kind":"EventList","items":[
+  {"metadata":{"name":"alerts-api-7f7d9-x1.1","namespace":"production","creationTimestamp":%q},
+   "type":"Warning","reason":"BackOff","count":4,
+   "firstTimestamp":%q,"lastTimestamp":%q,
+   "involvedObject":{"kind":"Pod","name":"alerts-api-7f7d9-x1","uid":"u1"},
+   "message":"back-off 40s restarting failed container=app"},
+  {"metadata":{"name":"other-team-api-z.1","namespace":"production","creationTimestamp":%q},
+   "type":"Warning","reason":"BackOff","count":9,
+   "firstTimestamp":%q,"lastTimestamp":%q,
+   "involvedObject":{"kind":"Pod","name":"other-team-api-z","uid":"u2"},
+   "message":"must not appear"}]}`, recent, recent, recent, older, older, older)
+}
+
 func kubeHandler(t *testing.T) http.HandlerFunc {
 	t.Helper()
 	return func(w http.ResponseWriter, r *http.Request) {
@@ -115,8 +160,8 @@ func kubeHandler(t *testing.T) http.HandlerFunc {
 		if got := r.Header.Get("Authorization"); got != "Bearer "+e2eToken {
 			t.Errorf("Authorization = %q, want the configured bearer token", got)
 		}
-		if got := r.URL.Query().Get("labelSelector"); got != "app=alerts-api" {
-			t.Errorf("labelSelector = %q, want app=alerts-api", got)
+		if sel := r.URL.Query().Get("labelSelector"); sel != "" && sel != "app=alerts-api" {
+			t.Errorf("labelSelector = %q, want app=alerts-api", sel)
 		}
 		if !strings.Contains(r.URL.Path, "/namespaces/production/") {
 			t.Errorf("path %q escapes the allowed namespace", r.URL.Path)
@@ -128,6 +173,10 @@ func kubeHandler(t *testing.T) http.HandlerFunc {
 			_, _ = io.WriteString(w, e2ePodList)
 		case strings.HasSuffix(r.URL.Path, "/deployments"):
 			_, _ = io.WriteString(w, e2eDeploymentList)
+		case strings.HasSuffix(r.URL.Path, "/replicasets"):
+			_, _ = io.WriteString(w, e2eReplicaSetList)
+		case strings.HasSuffix(r.URL.Path, "/events"):
+			_, _ = io.WriteString(w, e2eEvents(time.Now()))
 		default:
 			t.Errorf("unexpected path %s", r.URL.Path)
 			http.NotFound(w, r)
@@ -178,6 +227,8 @@ func TestServerEndToEnd(t *testing.T) {
 		`{"jsonrpc":"2.0","id":12,"method":"tools/call","params":{"name":"get_pod_failures","arguments":{"service":"payments-api"}}}`,
 		`{"jsonrpc":"2.0","id":13,"method":"tools/call","params":{"name":"no_such_tool"}}`,
 		`{"jsonrpc":"2.0","id":14,"method":"resources/read","params":{"uri":"incident://missing"}}`,
+		`{"jsonrpc":"2.0","id":17,"method":"tools/call","params":{"name":"get_deploy_history","arguments":{"service":"alerts-api"}}}`,
+		`{"jsonrpc":"2.0","id":18,"method":"tools/call","params":{"name":"get_alerts","arguments":{"service":"alerts-api"}}}`,
 		`{"jsonrpc":"2.0","id":15,"method":"unknown/method"}`,
 		`{"jsonrpc":"1.0","id":16,"method":"ping"}`,
 		`not json at all`,
@@ -193,11 +244,11 @@ func TestServerEndToEnd(t *testing.T) {
 		t.Fatalf("Serve: %v", err)
 	}
 
-	// The notification must not produce a response: 16 requests expect a
-	// reply, plus the parse-error reply.
+	// The notification must not produce a response: every request above
+	// expects a reply, plus the parse-error reply.
 	lines := strings.Split(strings.TrimRight(out.String(), "\n"), "\n")
-	if len(lines) != 17 {
-		t.Fatalf("got %d response lines, want 17:\n%s", len(lines), out.String())
+	if len(lines) != 19 {
+		t.Fatalf("got %d response lines, want 19:\n%s", len(lines), out.String())
 	}
 
 	responses := make([]rpcResponse, 0, len(lines))
@@ -261,8 +312,8 @@ func TestServerEndToEnd(t *testing.T) {
 		if err := json.Unmarshal(byID["3"].Result, &list); err != nil {
 			t.Fatalf("decode: %v", err)
 		}
-		if len(list.Tools) != 4 {
-			t.Fatalf("got %d tools, want 4", len(list.Tools))
+		if len(list.Tools) != 6 {
+			t.Fatalf("got %d tools, want 6", len(list.Tools))
 		}
 		for _, tool := range list.Tools {
 			if tool.Description == "" || tool.InputSchema["type"] != "object" {
@@ -356,6 +407,78 @@ func TestServerEndToEnd(t *testing.T) {
 		}
 		if !strings.Contains(fmt.Sprint(ev["notes"]), "confidence scoring") {
 			t.Error("notes should disclose the absence of confidence scoring")
+		}
+	})
+
+	t.Run("get_deploy_history", func(t *testing.T) {
+		ev := callJSON(t, byID["17"])
+		if ev["service"] != "alerts-api" {
+			t.Errorf("service = %v", ev["service"])
+		}
+		rollouts := ev["rollout_history"].([]any)
+		if len(rollouts) != 2 {
+			t.Fatalf("rollout_history = %v", rollouts)
+		}
+		first, second := rollouts[0].(map[string]any), rollouts[1].(map[string]any)
+		// Newest revision first, and the newest one marked current.
+		if first["revision"].(float64) != 15 || second["revision"].(float64) != 14 {
+			t.Errorf("revisions out of order: %v then %v", first["revision"], second["revision"])
+		}
+		if first["current"] != true {
+			t.Error("revision 15 should be marked current")
+		}
+		if second["current"] != false {
+			t.Error("revision 14 should not be current")
+		}
+		if second["scaled_to_zero"] != true {
+			t.Error("a ReplicaSet with 0 desired replicas should be marked scaled_to_zero")
+		}
+		if imgs := second["images"].([]any); len(imgs) != 1 || imgs[0] != "registry.internal/alerts-api:1.2.4" {
+			t.Errorf("images = %v", imgs)
+		}
+
+		events := ev["events"].([]any)
+		if len(events) != 1 {
+			t.Fatalf("events = %v", events)
+		}
+		ev0 := events[0].(map[string]any)
+		if ev0["reason"] != "BackOff" || ev0["object"] != "Pod/alerts-api-7f7d9-x1" {
+			t.Errorf("event = %v", ev0)
+		}
+		// The other team's event and the out-of-window event must be gone.
+		if strings.Contains(fmt.Sprint(ev), "other-team-api") {
+			t.Error("history leaked another service's events")
+		}
+		if strings.Contains(fmt.Sprint(ev), "must not appear") {
+			t.Error("history leaked an event outside the window")
+		}
+		if partial := ev["partial_failures"].([]any); len(partial) != 0 {
+			t.Errorf("partial_failures = %v", partial)
+		}
+	})
+
+	t.Run("get_alerts", func(t *testing.T) {
+		ev := callJSON(t, byID["18"])
+		// The other team's alert must be filtered out by the service scope.
+		if strings.Contains(fmt.Sprint(ev["alerts"]), "OtherTeamAlert") {
+			t.Errorf("alert list was not scoped to the service: %v", ev["alerts"])
+		}
+		if ev["firing_count"].(float64) != 1 || ev["pending_count"].(float64) != 1 {
+			t.Errorf("counts = firing %v pending %v", ev["firing_count"], ev["pending_count"])
+		}
+		alerts := ev["alerts"].([]any)
+		if len(alerts) != 2 {
+			t.Fatalf("alerts = %v", alerts)
+		}
+		top := alerts[0].(map[string]any)
+		if top["state"] != "firing" {
+			t.Errorf("firing alerts must sort first, got %v", top["state"])
+		}
+		if top["name"] != "HighErrorRate" {
+			t.Errorf("alert name = %v", top["name"])
+		}
+		if !strings.Contains(fmt.Sprint(ev["notes"]), "Alertmanager") {
+			t.Error("notes should disclose that Alertmanager silences are not visible")
 		}
 	})
 
@@ -484,8 +607,14 @@ func TestServerEndToEnd(t *testing.T) {
 		if strings.Contains(logBuf.String(), e2eToken) {
 			t.Fatalf("the bearer token was written to the log:\n%s", logBuf.String())
 		}
-		if !strings.Contains(logBuf.String(), "tools/call name=get_pod_failures") {
-			t.Error("expected request logging to stderr")
+		for _, want := range []string{
+			"audit tool=get_pod_failures outcome=ok",
+			"audit tool=get_pod_failures outcome=tool_error", // the out-of-scope call
+			"duration_ms=",
+		} {
+			if !strings.Contains(logBuf.String(), want) {
+				t.Errorf("expected audit log to contain %q in:\n%s", want, logBuf.String())
+			}
 		}
 	})
 }

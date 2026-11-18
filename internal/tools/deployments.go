@@ -5,21 +5,24 @@ import (
 	"encoding/json"
 	"fmt"
 	"time"
+
+	"incident-mcp/internal/backend"
 )
 
 // deploymentEvidence lists the current Deployment objects for the service and
-// reports rollout status. It deliberately states that these are current
-// objects: this MVP does not reconstruct historical rollout events.
+// reports rollout state. It deliberately reports current objects only: the
+// change history lives in historyEvidence, behind get_deploy_history.
 func (r *Registry) deploymentEvidence(ctx context.Context, j job) (map[string]any, error) {
 	if r.kube == nil {
 		return nil, fmt.Errorf("kubernetes backend is not configured")
 	}
 	ns := r.cfg.AllowedNamespace
 	selector := "app=" + j.Service
-	deps, err := r.kube.ListDeployments(ctx, ns, j.Service)
+	page, err := r.kube.ListDeployments(ctx, ns, j.Service, backend.ListOptions{Limit: j.Limit})
 	if err != nil {
 		return nil, fmt.Errorf("kubernetes deployment list failed: %w", err)
 	}
+	deps := page.Items
 
 	now := r.now()
 	items := []map[string]any{}
@@ -65,16 +68,22 @@ func (r *Registry) deploymentEvidence(ctx context.Context, j job) (map[string]an
 	if len(deps) == 0 {
 		partial = append(partial, fmt.Sprintf("no Deployments matched label selector %q in namespace %q", selector, ns))
 	}
+	if page.Truncated {
+		partial = append(partial, fmt.Sprintf(
+			"deployment list truncated at the page limit of %d; more Deployments may exist. Re-run with the returned next_continue token to fetch the next page.",
+			page.Limit))
+	}
 
 	return map[string]any{
 		"service":          j.Service,
 		"namespace":        ns,
 		"selector":         selector,
 		"deployment_count": len(deps),
+		"page":             page.PageInfo(),
 		"deployments":      items,
 		"observations":     observations,
 		"partial_failures": partial,
-		"notes":            []string{noteSelector, noteDeploymentHistory, noteRedaction},
+		"notes":            []string{noteSelector, noteDeploymentHistory, noteRedaction, notePageLimit},
 	}, nil
 }
 

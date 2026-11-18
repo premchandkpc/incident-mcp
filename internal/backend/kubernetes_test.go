@@ -86,12 +86,19 @@ func TestListPodsSendsScopedBearerToken(t *testing.T) {
 	if err != nil {
 		t.Fatalf("NewKubernetes: %v", err)
 	}
-	pods, err := k.ListPods(context.Background(), "production", "alerts-api")
+	page, err := k.ListPods(context.Background(), "production", "alerts-api", ListOptions{})
 	if err != nil {
 		t.Fatalf("ListPods: %v", err)
 	}
+	pods := page.Items
 	if len(pods) != 2 {
 		t.Fatalf("got %d pods, want 2", len(pods))
+	}
+	if page.Limit != DefaultListLimit {
+		t.Errorf("page limit = %d, want the default %d", page.Limit, DefaultListLimit)
+	}
+	if page.Continue != "" || page.Truncated {
+		t.Errorf("single-page response must not report more data: %+v", page)
 	}
 	if pods[0].Metadata.Name != "alerts-api-6f7d9-x1" {
 		t.Errorf("pod name = %q", pods[0].Metadata.Name)
@@ -121,12 +128,16 @@ func TestListDeploymentsParsesRolloutState(t *testing.T) {
 	if err != nil {
 		t.Fatalf("NewKubernetes: %v", err)
 	}
-	deps, err := k.ListDeployments(context.Background(), "production", "alerts-api")
+	page, err := k.ListDeployments(context.Background(), "production", "alerts-api", ListOptions{Limit: 10})
 	if err != nil {
 		t.Fatalf("ListDeployments: %v", err)
 	}
+	deps := page.Items
 	if len(deps) != 1 {
 		t.Fatalf("got %d deployments, want 1", len(deps))
+	}
+	if page.Limit != 10 {
+		t.Errorf("page limit = %d, want 10", page.Limit)
 	}
 	d := deps[0]
 	if d.DesiredReplicas() != 3 {
@@ -156,7 +167,7 @@ func TestKubernetesOmitsAuthorizationWhenNoToken(t *testing.T) {
 	if err != nil {
 		t.Fatalf("NewKubernetes: %v", err)
 	}
-	if _, err := k.ListPods(context.Background(), "production", "alerts-api"); err != nil {
+	if _, err := k.ListPods(context.Background(), "production", "alerts-api", ListOptions{}); err != nil {
 		t.Fatalf("ListPods: %v", err)
 	}
 }
@@ -181,7 +192,7 @@ func TestKubernetesDoesNotFollowRedirects(t *testing.T) {
 	if err != nil {
 		t.Fatalf("NewKubernetes: %v", err)
 	}
-	_, err = k.ListPods(context.Background(), "production", "alerts-api")
+	_, err = k.ListPods(context.Background(), "production", "alerts-api", ListOptions{})
 	if err == nil {
 		t.Fatal("expected error for redirect response")
 	}
@@ -206,7 +217,7 @@ func TestKubernetesErrorBodyDoesNotLeakToken(t *testing.T) {
 	if err != nil {
 		t.Fatalf("NewKubernetes: %v", err)
 	}
-	_, err = k.ListPods(context.Background(), "production", "alerts-api")
+	_, err = k.ListPods(context.Background(), "production", "alerts-api", ListOptions{})
 	if err == nil {
 		t.Fatal("expected error for 403")
 	}
@@ -231,10 +242,10 @@ func TestKubernetesRejectsInvalidScope(t *testing.T) {
 	if err != nil {
 		t.Fatalf("NewKubernetes: %v", err)
 	}
-	if _, err := k.ListPods(context.Background(), "Production!", "alerts-api"); err == nil {
+	if _, err := k.ListPods(context.Background(), "Production!", "alerts-api", ListOptions{}); err == nil {
 		t.Error("invalid namespace should be rejected before any request")
 	}
-	if _, err := k.ListPods(context.Background(), "production", "OTHER"); err == nil {
+	if _, err := k.ListPods(context.Background(), "production", "OTHER", ListOptions{}); err == nil {
 		t.Error("invalid service should be rejected before any request")
 	}
 }
@@ -258,7 +269,7 @@ func TestKubernetesRejectsMalformedResponse(t *testing.T) {
 	if err != nil {
 		t.Fatalf("NewKubernetes: %v", err)
 	}
-	if _, err := k.ListPods(context.Background(), "production", "alerts-api"); err == nil {
+	if _, err := k.ListPods(context.Background(), "production", "alerts-api", ListOptions{}); err == nil {
 		t.Fatal("expected decode error")
 	}
 }

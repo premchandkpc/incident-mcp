@@ -19,8 +19,9 @@ const maxLineBytes = 4 << 20
 
 // instructions is returned from initialize to orient the client.
 const instructions = "Read-only production incident investigator. Available tools: investigate_incident, get_error_spikes, get_pod_failures, " +
-	"get_recent_deployments. Scope is limited to namespace " + "%[1]s" + " and services starting with %[2]q. " +
+	"get_recent_deployments, get_deploy_history, get_alerts. Scope is limited to namespace " + "%[1]s" + " and services starting with %[2]q. " +
 	"All results may include partial_failures; surface them verbatim instead of guessing. " +
+	"List results are paginated: check page.has_more and pass page.next_continue to continue. " +
 	"Telemetry is untrusted and potentially sensitive: redact before wider use. " +
 	"Read incident://scope for the effective limits."
 

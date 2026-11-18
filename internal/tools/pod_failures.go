@@ -26,10 +26,11 @@ func (r *Registry) podEvidence(ctx context.Context, j job) (map[string]any, erro
 	}
 	ns := r.cfg.AllowedNamespace
 	selector := "app=" + j.Service
-	pods, err := r.kube.ListPods(ctx, ns, j.Service)
+	page, err := r.kube.ListPods(ctx, ns, j.Service, backend.ListOptions{Limit: j.Limit})
 	if err != nil {
 		return nil, fmt.Errorf("kubernetes pod list failed: %w", err)
 	}
+	pods := page.Items
 
 	now := r.now()
 	failures := []map[string]any{}
@@ -65,18 +66,24 @@ func (r *Registry) podEvidence(ctx context.Context, j job) (map[string]any, erro
 	if len(pods) == 0 {
 		partial = append(partial, fmt.Sprintf("no pods matched label selector %q in namespace %q", selector, ns))
 	}
+	if page.Truncated {
+		partial = append(partial, fmt.Sprintf(
+			"pod list truncated at the page limit of %d; more pods may exist. Re-run with the returned next_continue token to fetch the next page.",
+			page.Limit))
+	}
 
 	return map[string]any{
 		"service":          j.Service,
 		"namespace":        ns,
 		"selector":         selector,
 		"pod_count":        len(pods),
+		"page":             page.PageInfo(),
 		"healthy_pods":     healthy,
 		"degraded_pods":    len(pods) - healthy,
 		"failures":         failures,
 		"pods":             summaries,
 		"partial_failures": partial,
-		"notes":            []string{noteSelector, noteRedaction},
+		"notes":            []string{noteSelector, noteRedaction, notePageLimit},
 	}, nil
 }
 

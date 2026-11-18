@@ -123,6 +123,57 @@ func isLoopback(host string) bool {
 	return ip != nil && ip.IsLoopback()
 }
 
+// PageLimit resolves a requested page size. A non-positive request selects
+// the default; a request above the maximum is clamped and reported so the
+// caller can see the truncation rather than silently receiving fewer items
+// than asked for.
+func PageLimit(requested, defaultLimit, maxLimit int) (limit int, err error) {
+	if defaultLimit <= 0 || maxLimit <= 0 || defaultLimit > maxLimit {
+		return 0, fmt.Errorf("page limit bounds must be positive and default <= max, got default %d max %d", defaultLimit, maxLimit)
+	}
+	if requested <= 0 {
+		return defaultLimit, nil
+	}
+	if requested > maxLimit {
+		return maxLimit, nil
+	}
+	return requested, nil
+}
+
+// continueToken bounds an opaque Kubernetes continue token. These are
+// base64url-encoded, so a strict character class plus a length cap keeps a
+// caller from using the field as an injection or amplification vector.
+func ContinueToken(s string) error {
+	if s == "" {
+		return nil
+	}
+	const maxToken = 4096
+	if len(s) > maxToken {
+		return fmt.Errorf("continue token must be at most %d characters, got %d", maxToken, len(s))
+	}
+	for i := 0; i < len(s); i++ {
+		c := s[i]
+		ok := (c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') || (c >= '0' && c <= '9') ||
+			c == '-' || c == '_' || c == '=' || c == '/'
+		if !ok {
+			return fmt.Errorf("continue token contains an invalid character at position %d", i)
+		}
+	}
+	return nil
+}
+
+// AlertState validates an optional Prometheus alert state filter. Empty means
+// "both states"; anything else must be one of the two states Prometheus
+// reports, so a typo becomes a clear error instead of silently returning
+// everything.
+func AlertState(s string) (string, error) {
+	switch s {
+	case "", "firing", "pending":
+		return s, nil
+	}
+	return "", fmt.Errorf("state must be one of %q, %q or empty (got %q)", "firing", "pending", s)
+}
+
 // Window resolves the requested window in minutes against MAX_WINDOW_MINUTES.
 // A non-positive request selects the default window; a request above the
 // maximum is clamped and reported so callers can see the truncation.

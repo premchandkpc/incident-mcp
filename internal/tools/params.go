@@ -7,6 +7,7 @@ import (
 	"math"
 	"time"
 
+	"incident-mcp/internal/backend"
 	"incident-mcp/internal/validate"
 )
 
@@ -16,15 +17,21 @@ type params struct {
 	WindowMinutes int    `json:"window_minutes"`
 	Start         string `json:"start"`
 	End           string `json:"end"`
+	Limit         int    `json:"limit"`
+	Continue      string `json:"continue"`
+	AlertState    string `json:"state"`
 }
 
 // job is a validated, fully resolved investigation request.
 type job struct {
-	Service string
-	Start   time.Time
-	End     time.Time
-	Minutes int
-	Clamped bool
+	Service    string
+	Start      time.Time
+	End        time.Time
+	Minutes    int
+	Clamped    bool
+	Limit      int
+	Continue   string
+	AlertState string
 }
 
 // decode unmarshals MCP tool arguments. Unknown fields are ignored so that
@@ -66,12 +73,26 @@ func (r *Registry) resolve(raw json.RawMessage) (job, error) {
 	if actual < 1 {
 		actual = 1
 	}
+	limit, err := validate.PageLimit(p.Limit, backend.DefaultListLimit, backend.MaxListLimit)
+	if err != nil {
+		return job{}, err
+	}
+	if err := validate.ContinueToken(p.Continue); err != nil {
+		return job{}, err
+	}
+	state, err := validate.AlertState(p.AlertState)
+	if err != nil {
+		return job{}, err
+	}
 	return job{
-		Service: p.Service,
-		Start:   start,
-		End:     end,
-		Minutes: actual,
-		Clamped: clamped || tClamped,
+		Service:    p.Service,
+		Start:      start,
+		End:        end,
+		Minutes:    actual,
+		Clamped:    clamped || tClamped,
+		Limit:      limit,
+		Continue:   p.Continue,
+		AlertState: state,
 	}, nil
 }
 

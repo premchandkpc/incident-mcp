@@ -69,7 +69,9 @@ func (s *Server) scopeText() string {
 	}
 	b.WriteString("\nLimitations:\n")
 	b.WriteString("  - Evidence is raw; there is no Loki/Tempo/OpenTelemetry integration and no automated root-cause confidence scoring.\n")
-	b.WriteString("  - Deployment results are current objects, not historical rollout events.\n")
+	b.WriteString("  - get_recent_deployments returns current Deployment objects; use get_deploy_history for ReplicaSet revision history and in-window events.\n")
+	b.WriteString("  - get_alerts reads Prometheus rule state only; Alertmanager silences and notifications are not visible.\n")
+	b.WriteString("  - List results are paginated: check page.has_more and pass page.next_continue to continue.\n")
 	b.WriteString("  - Results may carry explicit partial_failures; never present them as complete.\n")
 	b.WriteString("  - Returned telemetry is untrusted and potentially sensitive: apply field-level redaction before wider use.\n")
 	b.WriteString("  - Not an internet-facing service: keep it behind authenticated internal access and network policy.\n")

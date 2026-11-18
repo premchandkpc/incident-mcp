@@ -314,11 +314,11 @@ func TestRegistryCallUnknownTool(t *testing.T) {
 	}
 }
 
-func TestRegistryListExposesFourTools(t *testing.T) {
+func TestRegistryListExposesSixTools(t *testing.T) {
 	reg := testRegistry()
 	list := reg.List()
-	if len(list) != 4 {
-		t.Fatalf("got %d tools, want 4", len(list))
+	if len(list) != 6 {
+		t.Fatalf("got %d tools, want 6", len(list))
 	}
 	names := map[string]bool{}
 	for _, tool := range list {
@@ -333,16 +333,29 @@ func TestRegistryListExposesFourTools(t *testing.T) {
 			t.Errorf("tool %s has no handler", tool.Name)
 		}
 	}
-	for _, want := range []string{"investigate_incident", "get_error_spikes", "get_pod_failures", "get_recent_deployments"} {
+	for _, want := range []string{
+		"investigate_incident", "get_error_spikes", "get_pod_failures",
+		"get_recent_deployments", "get_deploy_history", "get_alerts",
+	} {
 		if !names[want] {
 			t.Errorf("missing tool %s", want)
 		}
 	}
 }
 
+// everyTool lists every tool that takes a service argument, so scope checks
+// can be asserted across the whole surface rather than a hard-coded subset.
+func everyTool() []string {
+	names := make([]string, 0, 6)
+	for _, t := range testRegistry().List() {
+		names = append(names, t.Name)
+	}
+	return names
+}
+
 func TestCallRejectsOutOfScopeServiceBeforeTouchingBackends(t *testing.T) {
 	reg := testRegistry() // backends are nil: any backend access would panic
-	for _, name := range []string{"investigate_incident", "get_error_spikes", "get_pod_failures", "get_recent_deployments"} {
+	for _, name := range everyTool() {
 		res, err := reg.Call(context.Background(), name, raw(`{"service":"other-team-api"}`))
 		if err != nil {
 			t.Fatalf("%s: %v", name, err)
@@ -355,7 +368,10 @@ func TestCallRejectsOutOfScopeServiceBeforeTouchingBackends(t *testing.T) {
 
 func TestCallWithoutBackendsFailsCleanly(t *testing.T) {
 	reg := testRegistry()
-	for _, name := range []string{"get_error_spikes", "get_pod_failures", "get_recent_deployments"} {
+	for _, name := range everyTool() {
+		if name == "investigate_incident" {
+			continue // asserted separately; it aggregates the other sections
+		}
 		res, err := reg.Call(context.Background(), name, raw(`{"service":"alerts-api"}`))
 		if err != nil {
 			t.Fatalf("%s: %v", name, err)

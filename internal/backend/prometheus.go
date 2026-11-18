@@ -108,6 +108,97 @@ func formatUnix(t time.Time) string {
 	return strconv.FormatFloat(float64(sec)+float64(nsec)/1e9, 'f', 3, 64)
 }
 
+// Alert is one active alert from Prometheus's /api/v1/alerts endpoint.
+type Alert struct {
+	Labels      map[string]string `json:"labels"`
+	Annotations map[string]string `json:"annotations"`
+	State       string            `json:"state"` // "firing" or "pending"
+	ActiveAt    time.Time         `json:"activeAt"`
+	Value       float64           `json:"value"`
+}
+
+// Name returns the alertname label, falling back to a joined label summary
+// so an unlabelled alert is still identifiable.
+func (a Alert) Name() string {
+	if n := a.Labels["alertname"]; n != "" {
+		return n
+	}
+	if len(a.Labels) == 0 {
+		return "(unnamed alert)"
+	}
+	keys := make([]string, 0, len(a.Labels))
+	for k := range a.Labels {
+		keys = append(keys, k)
+	}
+	sort.Strings(keys)
+	parts := make([]string, 0, len(keys))
+	for _, k := range keys {
+		parts = append(parts, k+"="+a.Labels[k])
+	}
+	return strings.Join(parts, ",")
+}
+
+// Summary returns the first non-empty annotation, bounded by the caller.
+func (a Alert) Summary() string {
+	for _, key := range []string{"summary", "description", "runbook_url"} {
+		if v := a.Annotations[key]; v != "" {
+			return v
+		}
+	}
+	return ""
+}
+
+// Service returns the service label if the alert carries one.
+func (a Alert) Service() string { return a.Labels["service"] }
+
+// Alerts runs a single instant query against /api/v1/alerts and returns the
+// active alerts, optionally filtered by state ("firing" or "pending"; empty
+// means both). An empty result is not an error.
+func (p *Prometheus) Alerts(ctx context.Context, state string) ([]Alert, error) {
+	u := *p.base
+	u.Path = path.Join(strings.TrimSuffix(p.base.Path, "/"), "/api/v1/alerts")
+	if state != "" {
+		q := u.Query()
+		q.Set("state", state)
+		u.RawQuery = q.Encode()
+	}
+
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, u.String(), nil)
+	if err != nil {
+		return nil, fmt.Errorf("prometheus: build request: %w", err)
+	}
+	req.Header.Set("Accept", "application/json")
+
+	p.log.Printf("prometheus alerts state=%q", state)
+	resp, err := p.client.Do(req)
+	if err != nil {
+		return nil, fmt.Errorf("prometheus: request failed: %w", err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		return nil, fmt.Errorf("prometheus: unexpected status %s: %s", resp.Status, readErrorBody(resp.Body))
+	}
+	var ar struct {
+		Status    string `json:"status"`
+		ErrorType string `json:"errorType"`
+		Error     string `json:"error"`
+		Data      struct {
+			Alerts []Alert `json:"alerts"`
+		} `json:"data"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&ar); err != nil {
+		return nil, fmt.Errorf("prometheus: decode alerts: %w", err)
+	}
+	if ar.Status != "success" {
+		return nil, fmt.Errorf("prometheus: alert query error (%s): %s", ar.ErrorType, ar.Error)
+	}
+	if ar.Data.Alerts == nil {
+		return []Alert{}, nil
+	}
+	return ar.Data.Alerts, nil
+}
+
 type promResponse struct {
 	Status    string   `json:"status"`
 	ErrorType string   `json:"errorType"`

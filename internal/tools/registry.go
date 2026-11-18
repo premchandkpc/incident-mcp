@@ -26,9 +26,11 @@ const callTimeout = 90 * time.Second
 const (
 	noteMetricNames       = "Prometheus metric names and labels are illustrative and must match your instrumentation."
 	noteSelector          = "Kubernetes resources are selected using app=<service>; adapt this to your actual deployment labels."
-	noteDeploymentHistory = "Deployment results show current objects, not historical rollout events. Use Kubernetes audit/events or CD history for true deployment history."
+	noteDeploymentHistory = "Deployment results show current objects, not historical rollout events. Use get_deploy_history for ReplicaSet/revision history, or Kubernetes audit/events or CD history for true deployment history."
 	noteRedaction         = "Returned telemetry is untrusted and potentially sensitive: apply field-level redaction before wider use."
 	noteNoScoring         = "No automated root-cause confidence scoring is performed; correlation is left to the operator."
+	notePageLimit         = "List results are paginated; check page.has_more and pass page.next_continue as continue to fetch the next page."
+	noteLatencyMetric     = "Latency percentiles require a histogram metric (http_request_duration_seconds_bucket); if your instrumentation differs, the latency section reports a partial failure instead of a number."
 )
 
 // Content is a single MCP content block.
@@ -97,9 +99,21 @@ func NewRegistry(cfg config.Config, prom *backend.Prometheus, kube *backend.Kube
 		},
 		{
 			Name:        "get_recent_deployments",
-			Description: "List the current Kubernetes Deployment objects for one service in the allowed namespace, with replica rollout status, container images and revision annotations. These are current objects, not historical rollout events.",
+			Description: "List the current Kubernetes Deployment objects for one service in the allowed namespace, with replica rollout status, container images and revision annotations. These are current objects, not historical rollout events; use get_deploy_history for what changed.",
 			InputSchema: deploymentsSchema(cfg),
 			Handler:     r.handleDeployments,
+		},
+		{
+			Name:        "get_deploy_history",
+			Description: "Reconstruct what changed for one service: ReplicaSet revisions (each carrying the image it rolled out) ordered newest first, plus Kubernetes events for the service inside the time window. Answers \"what changed recently?\" rather than \"what does it look like now?\".",
+			InputSchema: historySchema(cfg),
+			Handler:     r.handleDeployHistory,
+		},
+		{
+			Name:        "get_alerts",
+			Description: "Return the alerts Prometheus is currently evaluating for one service, with an optional state filter. Reports firing and pending counts, labels, annotations and how long each has been active. Does not reflect Alertmanager silences.",
+			InputSchema: alertsSchema(cfg),
+			Handler:     r.handleAlerts,
 		},
 	}
 	for _, t := range r.tools {
@@ -113,15 +127,44 @@ func (r *Registry) List() []Tool { return r.tools }
 
 // Call executes a tool. A non-nil error means the tool name is unknown, which
 // the MCP layer reports as an invalid-params error.
+//
+// Every call is written to the audit log with its outcome, duration and
+// result size. Argument values are deliberately not logged: they can carry
+// operator notes, and the byte count is enough to spot an oversized payload.
 func (r *Registry) Call(ctx context.Context, name string, args json.RawMessage) (Result, error) {
 	t, ok := r.byName[name]
 	if !ok {
+		r.log.Printf("audit tool=%s outcome=unknown_tool args_bytes=%d", name, len(args))
 		return Result{}, fmt.Errorf("unknown tool %q", name)
 	}
 	ctx, cancel := context.WithTimeout(ctx, callTimeout)
 	defer cancel()
-	r.log.Printf("tools/call name=%s bytes=%d", name, len(args))
-	return t.Handler(ctx, args), nil
+
+	start := time.Now()
+	res := t.Handler(ctx, args)
+	took := time.Since(start)
+
+	r.log.Printf("audit tool=%s outcome=%s duration_ms=%d args_bytes=%d result_bytes=%d",
+		name, resultOutcome(res), took.Milliseconds(), len(args), resultBytes(res))
+	return res, nil
+}
+
+// resultOutcome classifies a tool result for the audit log.
+func resultOutcome(res Result) string {
+	if res.IsError {
+		return "tool_error"
+	}
+	return "ok"
+}
+
+// resultBytes is the total size of the text returned to the client, so an
+// unexpectedly large response is visible in the log.
+func resultBytes(res Result) int {
+	n := 0
+	for _, c := range res.Content {
+		n += len(c.Text)
+	}
+	return n
 }
 
 // jsonResult renders v as pretty JSON in a single text content block.
