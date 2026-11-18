@@ -132,7 +132,7 @@ func (k *Kubernetes) get(ctx context.Context, apiPath string, query url.Values, 
 		Metadata listMeta        `json:"metadata"`
 		Items    json.RawMessage `json:"items"`
 	}
-	if err := json.NewDecoder(resp.Body).Decode(&body); err != nil {
+	if err := decodeBoundedJSON(resp.Body, &body); err != nil {
 		return listMeta{}, fmt.Errorf("kubernetes: decode response from %s: %w", apiPath, err)
 	}
 	if items != nil && len(body.Items) > 0 {

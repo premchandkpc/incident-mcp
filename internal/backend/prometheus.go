@@ -89,7 +89,7 @@ func (p *Prometheus) Range(ctx context.Context, query string, start, end time.Ti
 	}
 
 	var pr promResponse
-	if err := json.NewDecoder(resp.Body).Decode(&pr); err != nil {
+	if err := decodeBoundedJSON(resp.Body, &pr); err != nil {
 		return nil, fmt.Errorf("prometheus: decode response: %w", err)
 	}
 	if pr.Status != "success" {
@@ -187,7 +187,7 @@ func (p *Prometheus) Alerts(ctx context.Context, state string) ([]Alert, error) 
 			Alerts []Alert `json:"alerts"`
 		} `json:"data"`
 	}
-	if err := json.NewDecoder(resp.Body).Decode(&ar); err != nil {
+	if err := decodeBoundedJSON(resp.Body, &ar); err != nil {
 		return nil, fmt.Errorf("prometheus: decode alerts: %w", err)
 	}
 	if ar.Status != "success" {
