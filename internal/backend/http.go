@@ -10,7 +10,7 @@ import (
 )
 
 const (
-	defaultTimeout = 15 * time.Second
+	defaultTimeout     = 15 * time.Second
 	// Cap how much of an upstream error body is echoed back to the caller so a
 	// hostile or misconfigured endpoint cannot flood the MCP response.
 	maxErrorBodyBytes = 2048
@@ -56,13 +56,13 @@ const maxSuccessBodyBytes = 8 << 20
 func decodeBoundedJSON(r io.Reader, dst any) error {
 	data, err := io.ReadAll(io.LimitReader(r, maxSuccessBodyBytes+1))
 	if err != nil {
-			return fmt.Errorf("read upstream JSON: %w", err)
+		return fmt.Errorf("read upstream JSON: %w", err)
 	}
 	if len(data) > maxSuccessBodyBytes {
-			return fmt.Errorf("upstream JSON response exceeds %d bytes", maxSuccessBodyBytes)
+		return fmt.Errorf("upstream JSON response exceeds %d bytes", maxSuccessBodyBytes)
 	}
 	if err := json.Unmarshal(data, dst); err != nil {
-			return fmt.Errorf("decode upstream JSON: %w", err)
+		return fmt.Errorf("decode upstream JSON: %w", err)
 	}
 	return nil
 }
