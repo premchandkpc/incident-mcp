@@ -10,7 +10,7 @@ import (
 )
 
 const (
-	defaultTimeout     = 15 * time.Second
+	defaultTimeout = 15 * time.Second
 	// Cap how much of an upstream error body is echoed back to the caller so a
 	// hostile or misconfigured endpoint cannot flood the MCP response.
 	maxErrorBodyBytes = 2048
